@@ -1,0 +1,6 @@
+outputs/
+data/All_Diets.csv
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
