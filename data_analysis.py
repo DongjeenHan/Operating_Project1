@@ -1,98 +1,124 @@
-import argparse
-import os
+# data_analysis.py
+# Run from inside Task1_app:
+#   python data_analysis.py --csv data/All_Diets.csv --out outputs
+
+import argparse, os, json, warnings
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+warnings.filterwarnings("ignore")
 
-# Convert numeric columns safely
+# ---------- Utility Functions ----------
+
 def coerce_numeric(df):
+    """Convert macro columns to numeric safely."""
     for col in ["Protein(g)", "Carbs(g)", "Fat(g)"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
-# Fill missing numeric values with column mean
 def fill_missing_numeric(df):
+    """Fill missing numeric values with column mean."""
     for col in ["Protein(g)", "Carbs(g)", "Fat(g)"]:
-        df[col] = df[col].fillna(df[col].mean(skipna=True))
+        if col in df.columns:
+            df[col] = df[col].fillna(df[col].mean(skipna=True))
     return df
 
-# Compute ratios
 def compute_ratios(df):
+    """Add Protein/Carbs and Carbs/Fat ratios with safe division."""
     df["Protein_to_Carbs_ratio"] = np.where(df["Carbs(g)"] != 0,
                                             df["Protein(g)"] / df["Carbs(g)"], np.nan)
     df["Carbs_to_Fat_ratio"] = np.where(df["Fat(g)"] != 0,
                                         df["Carbs(g)"] / df["Fat(g)"], np.nan)
     return df
 
-# Average macros per diet
+# ---------- Core Analyses ----------
+
 def avg_macros_per_diet(df):
-    return df.groupby("Diet_type")[["Protein(g)", "Carbs(g)", "Fat(g)"]].mean().sort_values("Protein(g)", ascending=False)
+    return (df.groupby("Diet_type")[["Protein(g)", "Carbs(g)", "Fat(g)"]]
+              .mean()
+              .sort_values("Protein(g)", ascending=False))
 
-# Top-N protein recipes per diet
 def topN_protein_per_diet(df, n):
-    return df.sort_values("Protein(g)", ascending=False).groupby("Diet_type", group_keys=False).head(n)
+    return (df.sort_values("Protein(g)", ascending=False)
+              .groupby("Diet_type", group_keys=False)
+              .head(n))
 
-# Most common cuisine per diet
 def most_common_cuisine_by_diet(df):
-    return (df.groupby("Diet_type")["Cuisine_type"]
-              .agg(lambda x: x.value_counts().idxmax()))
+    s = (df.groupby("Diet_type")["Cuisine_type"]
+           .agg(lambda x: x.value_counts().idxmax())
+           .reset_index())
+    s.columns = ["Diet_type", "Most_Common_Cuisine"]
+    return s
 
-# Summary of highest protein
 def highest_protein_summary(df, avg_df):
-    max_row = df.loc[df["Protein(g)"].idxmax()]
-    max_single_diet = str(max_row["Diet_type"])
-    max_single_value = float(max_row["Protein(g)"])
-    avg_top = avg_df.iloc[0]
+    max_recipe = df.loc[df["Protein(g)"].idxmax()]
+    single_diet = str(max_recipe["Diet_type"])
+    single_val = float(max_recipe["Protein(g)"])
     max_avg_diet = avg_df.index[0]
-    max_avg_value = float(avg_top["Protein(g)"])
+    max_avg_val = float(avg_df.iloc[0]["Protein(g)"])
     return {
-        "diet_with_highest_single_recipe_protein": max_single_diet,
-        "highest_single_recipe_protein_g": max_single_value,
+        "diet_with_highest_single_recipe_protein": single_diet,
+        "highest_single_recipe_protein_g": single_val,
         "diet_with_highest_avg_protein": max_avg_diet,
-        "highest_avg_protein_g": max_avg_value
+        "highest_avg_protein_g": max_avg_val
     }
 
-# Plot functions
+# ---------- Extra Analyses (nice-to-have) ----------
+
+def avg_macros_by_cuisine(df):
+    return df.groupby("Cuisine_type")[["Protein(g)", "Carbs(g)", "Fat(g)"]].mean().round(2)
+
+def recipe_counts_by_diet(df):
+    return df["Diet_type"].value_counts().rename_axis("Diet_type").reset_index(name="Recipe_Count")
+
+def macros_correlation(df):
+    return df[["Protein(g)", "Carbs(g)", "Fat(g)"]].corr()
+
+def macro_outliers(df):
+    q = df[["Protein(g)", "Carbs(g)", "Fat(g)"]].quantile(0.99)
+    return df[(df["Protein(g)"] > q["Protein(g)"]) |
+              (df["Carbs(g)"] > q["Carbs(g)"]) |
+              (df["Fat(g)"] > q["Fat(g)"])]
+
+# ---------- Plot Functions ----------
+
 def plot_bar_avg_macros(avg_df, outdir):
     plt.figure(figsize=(10,6))
-    x = np.arange(len(avg_df.index))
-    width = 0.25
-    plt.bar(x - width, avg_df["Protein(g)"], width, label="Protein(g)")
-    plt.bar(x, avg_df["Carbs(g)"], width, label="Carbs(g)")
-    plt.bar(x + width, avg_df["Fat(g)"], width, label="Fat(g)")
-    plt.xticks(x, avg_df.index, rotation=20, ha="right")
+    avg_melt = avg_df.reset_index().melt(id_vars="Diet_type", var_name="Macro", value_name="Grams")
+    sns.barplot(data=avg_melt, x="Diet_type", y="Grams", hue="Macro")
     plt.title("Average Macronutrients by Diet Type")
-    plt.ylabel("grams")
-    plt.legend()
+    plt.ylabel("Grams")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
     path = os.path.join(outdir, "bar_avg_macros_by_diet.png")
-    plt.tight_layout(); plt.savefig(path, dpi=150); plt.close()
+    plt.savefig(path, dpi=150); plt.close()
     return path
 
 def plot_heatmap_avg_macros(avg_df, outdir):
-    data = avg_df[["Protein(g)","Carbs(g)","Fat(g)"]].values
     plt.figure(figsize=(8, max(4, len(avg_df.index)*0.4)))
-    plt.imshow(data, aspect="auto")
-    plt.colorbar(label="grams")
-    plt.yticks(range(len(avg_df.index)), avg_df.index)
-    plt.xticks(range(3), ["Protein(g)","Carbs(g)","Fat(g)"])
+    sns.heatmap(avg_df, annot=True, cmap="YlGnBu", fmt=".1f")
     plt.title("Heatmap: Average Macros by Diet Type")
+    plt.tight_layout()
     path = os.path.join(outdir, "heatmap_avg_macros_by_diet.png")
-    plt.tight_layout(); plt.savefig(path, dpi=150); plt.close()
+    plt.savefig(path, dpi=150); plt.close()
     return path
 
 def plot_scatter_topN(top_df, outdir):
     if top_df.empty:
         return None
     plt.figure(figsize=(10,6))
-    for d, g in top_df.groupby("Diet_type"):
-        plt.scatter(g["Carbs(g)"], g["Protein(g)"], label=d, alpha=0.7)
-    plt.xlabel("Carbs (g)")
-    plt.ylabel("Protein (g)")
-    plt.title("Top-N Protein-Rich Recipes (by Diet)")
-    plt.legend(fontsize=8)
+    sns.scatterplot(data=top_df, x="Carbs(g)", y="Protein(g)", hue="Diet_type", s=120, edgecolor="black")
+    plt.xlabel("Carbs (g)"); plt.ylabel("Protein (g)")
+    plt.title("Top-N Protein-Rich Recipes by Diet Type")
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
     path = os.path.join(outdir, "scatter_topN_protein.png")
-    plt.tight_layout(); plt.savefig(path, dpi=150); plt.close()
+    plt.savefig(path, dpi=150); plt.close()
     return path
+
+# ---------- Main ----------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -103,48 +129,58 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-
-    # Load dataset
     df = pd.read_csv(args.csv)
 
-    # Ensure required columns
-    required = ["Diet_type", "Recipe_name", "Cuisine_type", "Protein(g)", "Carbs(g)", "Fat(g)"]
+    required = ["Diet_type","Recipe_name","Cuisine_type","Protein(g)","Carbs(g)","Fat(g)"]
     for c in required:
         if c not in df.columns:
-            raise ValueError(f"missing column: {c}")
+            raise ValueError(f"Missing required column: {c}")
 
-    # Clean and process
-    df = coerce_numeric(df)
-    df = fill_missing_numeric(df)
-    df = compute_ratios(df)
-
-    # Save intermediate cleaned data
+    # Clean & engineer
+    df = compute_ratios(fill_missing_numeric(coerce_numeric(df)))
     df.to_csv(os.path.join(args.out, "cleaned_with_ratios.csv"), index=False)
 
-    # Analysis
+    # Core outputs
     avg_df = avg_macros_per_diet(df)
     avg_df.to_csv(os.path.join(args.out, "avg_macros_by_diet.csv"))
-
     top_df = topN_protein_per_diet(df, args.topn)
     top_df.to_csv(os.path.join(args.out, "topN_protein_by_diet.csv"), index=False)
-
     mc_df = most_common_cuisine_by_diet(df)
-    mc_df.to_csv(os.path.join(args.out, "most_common_cuisine_by_diet.csv"))
-
+    mc_df.to_csv(os.path.join(args.out, "most_common_cuisine_by_diet.csv"), index=False)
     summary = highest_protein_summary(df, avg_df)
     pd.DataFrame([summary]).to_csv(os.path.join(args.out, "highest_protein_summary.csv"), index=False)
+
+    # Extras
+    avg_cuisine = avg_macros_by_cuisine(df)
+    avg_cuisine.to_csv(os.path.join(args.out, "avg_macros_by_cuisine.csv"))
+    counts = recipe_counts_by_diet(df)
+    counts.to_csv(os.path.join(args.out, "recipe_counts_by_diet.csv"), index=False)
+    corr = macros_correlation(df)
+    corr.to_csv(os.path.join(args.out, "macros_correlation.csv"))
+    outliers = macro_outliers(df)
+    outliers.to_csv(os.path.join(args.out, "macro_outliers.csv"), index=False)
 
     # Plots
     b = plot_bar_avg_macros(avg_df, args.out)
     h = plot_heatmap_avg_macros(avg_df, args.out)
     s = plot_scatter_topN(top_df, args.out)
 
-    # Optional display
-    if args.show == 1:
-        for path in [b, h, s]:
-            if path:
-                img_arr = plt.imread(path)
-                plt.figure(); plt.imshow(img_arr); plt.axis("off"); plt.title(os.path.basename(path)); plt.show()
+    # Console summaries (handy for screenshots)
+    print("\n=== Analysis Summary ===")
+    print(pd.DataFrame([summary]).to_string(index=False))
+    print("\nRecipe counts by diet:")
+    print(counts.to_string(index=False))
+    print("\nMacros correlation matrix:")
+    print(corr.round(2).to_string())
+    print("\nAll outputs saved to:", os.path.abspath(args.out))
+
+    # JSON summary (useful for Cosmos-style ingestion)
+    with open(os.path.join(args.out, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "highest_protein": summary,
+            "avg_macros_per_diet": avg_df.reset_index().to_dict(orient="records"),
+            "most_common_cuisine": mc_df.to_dict(orient="records")
+        }, f, indent=2)
 
 if __name__ == "__main__":
     main()
