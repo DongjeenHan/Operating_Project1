@@ -2,12 +2,15 @@ name: CI/CD Simulation
 
 on:
   push:
-    branches: ["main"]
+    branches: ["master", "main"]
   workflow_dispatch:
 
 jobs:
   build-test-push:
     runs-on: ubuntu-latest
+
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || 'dongjeen' }}
 
     steps:
       - name: Checkout
@@ -18,13 +21,10 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Install deps (for a quick smoke test)
+      - name: Install deps (smoke test)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Smoke test (import + dry run)
-        run: |
           python - << 'PY'
           import pandas, matplotlib
           print("Smoke OK")
@@ -36,25 +36,42 @@ jobs:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build image
-        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/diet-analysis:latest .
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/diet-analysis:latest .
 
       - name: Push image
-        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/diet-analysis:latest
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/diet-analysis:latest
 
-      # Simulated deployment: run container in CI and emit artifacts
+      - name: Ensure CSV exists (create dummy if missing)
+        run: |
+          mkdir -p data
+          if [ ! -f "data/All_Diets.csv" ]; then
+            echo "Diet_type,Recipe_name,Cuisine_type,Protein(g),Carbs(g),Fat(g),Extraction_day,Extraction_time" > data/All_Diets.csv
+            echo "sample,Example Recipe,american,10,20,5,2025-10-09,12:00:00" >> data/All_Diets.csv
+          fi
       - name: Run container (simulate deployment)
         run: |
-          mkdir -p outputs
+          set -e
+          echo "===> Host workspace listing"
+          ls -al ${{ github.workspace }}
+          echo "===> Host data listing"
+          ls -al ${{ github.workspace }}/data || true
+          echo "===> Make outputs dir"
+          mkdir -p ${{ github.workspace }}/outputs
+
+          echo "===> Container listing of /app and /app/data, then run analysis"
           docker run --rm \
             -v ${{ github.workspace }}/data:/app/data \
             -v ${{ github.workspace }}/outputs:/app/outputs \
+            --entrypoint /bin/sh \
             ${{ env.DOCKERHUB_USERNAME }}/diet-analysis:latest \
-            --csv data/All_Diets.csv --out outputs --topn 5
-          ls -alh outputs || true
+            -lc "pwd; ls -al /app; ls -al /app/data; python data_analysis.py --csv data/All_Diets.csv --out outputs --topn 5"
+
+          echo "===> Host outputs listing"
+          ls -al ${{ github.workspace }}/outputs || true
 
       - name: Upload outputs as artifact (proof)
         uses: actions/upload-artifact@v4
