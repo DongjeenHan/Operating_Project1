@@ -1,0 +1,12 @@
+services:
+  analysis:
+    image: dongjeen/diet-analysis:latest
+    environment:
+      CSV_PATH: "data/All_Diets.csv"
+      OUT_DIR: "outputs"
+      TOPN: "5"
+      SHOW: "0"
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+    restart: "no"
