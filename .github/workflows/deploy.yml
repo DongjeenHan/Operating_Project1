@@ -49,12 +49,11 @@ jobs:
       - name: Run container (simulate deployment)
         run: |
           mkdir -p outputs
-          mkdir -p data
-          # if you keep All_Diets.csv out of repo, this step will just run with empty data dir (that's OK for demo)
           docker run --rm \
             -v ${{ github.workspace }}/data:/app/data \
             -v ${{ github.workspace }}/outputs:/app/outputs \
-            ${{ secrets.DOCKERHUB_USERNAME }}/diet-analysis:latest
+            ${{ env.DOCKERHUB_USERNAME }}/diet-analysis:latest \
+            --csv data/All_Diets.csv --out outputs --topn 5
           ls -alh outputs || true
 
       - name: Upload outputs as artifact (proof)
